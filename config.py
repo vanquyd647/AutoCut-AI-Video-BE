@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,11 @@ class Settings(BaseSettings):
     max_video_size_mb: int = 500
     inline_video_limit_mb: int = 18
     analysis_segment_seconds: int = 25
+    auto_ping_enabled: bool = False
+    auto_ping_url: str | None = None
+    auto_ping_interval_seconds: int = 240
+    auto_ping_timeout_seconds: float = 10.0
+    auto_ping_initial_delay_seconds: int = 30
     allowed_extensions: list[str] = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
     cors_origins: list[str] = ["http://localhost:5173"]
 
@@ -57,6 +63,12 @@ class Settings(BaseSettings):
 
     def ffmpeg_available(self) -> bool:
         return ffmpeg_available(self.ffmpeg_path)
+
+    def resolve_auto_ping_url(self) -> str:
+        if self.auto_ping_url:
+            return self.auto_ping_url
+        port = os.getenv("PORT", "8000")
+        return f"http://127.0.0.1:{port}/api/health"
 
 
 @lru_cache(maxsize=1)

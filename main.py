@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api import ROUTERS
 from config import get_settings
-from core import EditPlanner, ExportService, GeminiClient, ProgressBroker, ProjectStore, VideoAnalyzer, VideoEditor
+from core import EditPlanner, ExportService, GeminiClient, KeepAlivePinger, ProgressBroker, ProjectStore, VideoAnalyzer, VideoEditor
 from models.schemas import ProgressUpdate
 
 
@@ -27,7 +27,18 @@ async def lifespan(app: FastAPI):
     app.state.video_editor = VideoEditor(settings)
     app.state.export_service = ExportService(settings)
     app.state.ffmpeg_available = settings.ffmpeg_available()
-    yield
+    app.state.keep_alive_pinger = KeepAlivePinger(
+        enabled=settings.auto_ping_enabled,
+        url=settings.resolve_auto_ping_url(),
+        interval_seconds=settings.auto_ping_interval_seconds,
+        timeout_seconds=settings.auto_ping_timeout_seconds,
+        initial_delay_seconds=settings.auto_ping_initial_delay_seconds,
+    )
+    app.state.keep_alive_pinger.start()
+    try:
+        yield
+    finally:
+        await app.state.keep_alive_pinger.stop()
 
 
 app = FastAPI(title="AutoCut AI Video API", version="0.1.0", lifespan=lifespan)
