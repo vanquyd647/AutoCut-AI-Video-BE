@@ -1,0 +1,7 @@
+{
+  "style": "youtube",
+  "aspect_ratio": "16:9",
+  "target_duration": 60,
+  "transition": "cut",
+  "color_grade": "cinematic"
+}

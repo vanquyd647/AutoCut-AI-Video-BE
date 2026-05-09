@@ -1,0 +1,7 @@
+{
+  "style": "instagram",
+  "aspect_ratio": "9:16",
+  "target_duration": 25,
+  "transition": "cross_dissolve",
+  "color_grade": "warm"
+}
