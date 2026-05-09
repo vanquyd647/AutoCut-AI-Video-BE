@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from ffmpeg_runtime import ffmpeg_available, resolve_ffmpeg_path
 
@@ -30,7 +31,7 @@ class Settings(BaseSettings):
     auto_ping_timeout_seconds: float = 10.0
     auto_ping_initial_delay_seconds: int = 30
     allowed_extensions: list[str] = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
-    cors_origins: list[str] = ["http://localhost:5173"]
+    cors_origins: Annotated[list[str], NoDecode] = ["*"]
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -38,12 +39,53 @@ class Settings(BaseSettings):
     def projects_dir(self) -> Path:
         return self.temp_dir / "projects"
 
-    @field_validator("allowed_extensions", "cors_origins", mode="before")
+    @field_validator("allowed_extensions", mode="before")
     @classmethod
     def split_csv_values(cls, value: Any) -> Any:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value: Any) -> Any:
+        if value is None:
+            return ["*"]
+
+        if isinstance(value, str):
+            raw_value = value.strip()
+            if not raw_value:
+                return ["*"]
+            if raw_value == "*":
+                return ["*"]
+
+            if raw_value.startswith("["):
+                try:
+                    parsed_value = json.loads(raw_value)
+                except json.JSONDecodeError:
+                    parsed_value = None
+                else:
+                    if isinstance(parsed_value, list):
+                        return cls._normalize_cors_origins(parsed_value)
+
+            return cls._normalize_cors_origins(raw_value.split(","))
+
+        if isinstance(value, (list, tuple, set)):
+            return cls._normalize_cors_origins(value)
+
+        return value
+
+    @staticmethod
+    def _normalize_cors_origins(values: Any) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            origin = str(value).strip().strip("\"").strip("'").rstrip("/")
+            if not origin:
+                continue
+            if origin == "*":
+                return ["*"]
+            normalized.append(origin)
+        return normalized or ["*"]
 
     def ensure_directories(self) -> None:
         for path in (

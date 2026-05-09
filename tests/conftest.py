@@ -114,6 +114,7 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         output_dir=tmp_path / "storage" / "output",
         temp_dir=tmp_path / "storage" / "temp",
         assets_dir=tmp_path / "assets",
+        cors_origins=["*"],
     )
     test_settings.ensure_directories()
 
