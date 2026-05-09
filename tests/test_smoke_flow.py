@@ -15,6 +15,11 @@ class FailingAnalyzer:
         raise RuntimeError("Gemini analysis failed")
 
 
+class BrokenProjectStore:
+    def get_project(self, project_id):
+        raise RuntimeError("Project metadata read failed")
+
+
 def test_frontend_backend_smoke_flow(client: TestClient, uploaded_project: dict[str, object]) -> None:
     project_id = uploaded_project["project_id"]
 
@@ -133,3 +138,26 @@ def test_analyze_returns_service_unavailable_when_analyzer_fails(
     project_payload = project_response.json()
     assert project_payload["status"] == "error"
     assert project_payload["progress"]["message"] == "Gemini analysis failed"
+
+
+def test_analyze_returns_service_unavailable_when_project_load_fails(client: TestClient) -> None:
+    origin = app_settings.cors_origins[0] if app_settings.cors_origins and app_settings.cors_origins[0] != "*" else "https://frontend.example.com"
+
+    original_store = client.app.state.project_store
+    client.app.state.project_store = BrokenProjectStore()
+    try:
+        analyze_response = client.post(
+            "/api/analyze",
+            json={
+                "project_id": "any-project-id",
+                "api_key": "test-key",
+                "model": "gemini-2.5-flash",
+            },
+            headers={"Origin": origin},
+        )
+    finally:
+        client.app.state.project_store = original_store
+
+    assert analyze_response.status_code == 503
+    assert analyze_response.json()["detail"] == "Project data is unavailable"
+    assert "access-control-allow-origin" in analyze_response.headers
