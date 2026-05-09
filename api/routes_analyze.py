@@ -25,11 +25,26 @@ async def analyze_project(payload: AnalyzeRequest, request: Request) -> AnalyzeR
     store.set_progress(payload.project_id, starting)
     await broker.publish(payload.project_id, starting)
 
-    analyses = await analyzer.analyze_batch(
-        videos=[(video.name, Path(video.path)) for video in record.videos],
-        api_key=api_key,
-        model=payload.model,
-    )
+    try:
+        analyses = await analyzer.analyze_batch(
+            videos=[(video.name, Path(video.path)) for video in record.videos],
+            api_key=api_key,
+            model=payload.model,
+        )
+    except RuntimeError as exc:
+        failed = ProgressUpdate(stage="error", progress=100, message=str(exc))
+        store.set_progress(payload.project_id, failed)
+        await broker.publish(payload.project_id, failed)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:
+        # Keep the client response stable while preserving detailed diagnostics in logs.
+        failed = ProgressUpdate(stage="error", progress=100, message="Analysis failed unexpectedly")
+        store.set_progress(payload.project_id, failed)
+        await broker.publish(payload.project_id, failed)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Analysis failed unexpectedly",
+        ) from exc
 
     finished = ProgressUpdate(stage="analyze", progress=100, message="Analysis complete")
     store.update_project(payload.project_id, analyses=analyses, status="analyzed", progress=finished)
