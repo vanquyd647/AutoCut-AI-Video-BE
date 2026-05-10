@@ -126,31 +126,12 @@ async def analyze_project(payload: AnalyzeRequest, request: Request, response: R
         )
         jobs[payload.project_id] = job
 
-    try:
-        analyses, error_message = await asyncio.wait_for(
-            asyncio.shield(job),
-            timeout=max(settings.analysis_sync_timeout_seconds, 1),
-        )
-    except asyncio.TimeoutError:
-        response.status_code = status.HTTP_202_ACCEPTED
-        return AnalyzeResponse(
-            analyses=record.analyses,
-            status="processing",
-            message=(
-                "Analysis is still running. Poll /api/project/"
-                f"{payload.project_id} for completion status."
-            ),
-        )
-    finally:
-        _cleanup_finished_job(jobs, payload.project_id)
-
-    if error_message is not None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=error_message)
-
-    try:
-        latest = store.get_project(payload.project_id)
-    except Exception:
-        latest = None
-
-    resolved_analyses = latest.analyses if latest is not None and latest.analyses else analyses or []
-    return AnalyzeResponse(analyses=resolved_analyses, status="completed")
+    response.status_code = status.HTTP_202_ACCEPTED
+    return AnalyzeResponse(
+        analyses=record.analyses,
+        status="processing",
+        message=(
+            "Analysis is running in the background. Poll /api/project/"
+            f"{payload.project_id} for completion status."
+        ),
+    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from fastapi.testclient import TestClient
 
@@ -28,6 +29,27 @@ class BrokenProjectStore:
         raise RuntimeError("Project metadata read failed")
 
 
+def _wait_for_project_status(
+    client: TestClient,
+    project_id: str,
+    expected_status: str,
+    timeout_seconds: float = 2.0,
+) -> dict[str, object]:
+    deadline = time.time() + timeout_seconds
+    last_payload: dict[str, object] = {}
+    while time.time() < deadline:
+        response = client.get(f"/api/project/{project_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        last_payload = payload
+        if payload["status"] == expected_status:
+            return payload
+        time.sleep(0.02)
+    raise AssertionError(
+        f"Project {project_id} did not reach status {expected_status}. Last payload: {last_payload}"
+    )
+
+
 def test_frontend_backend_smoke_flow(client: TestClient, uploaded_project: dict[str, object]) -> None:
     project_id = uploaded_project["project_id"]
 
@@ -39,9 +61,12 @@ def test_frontend_backend_smoke_flow(client: TestClient, uploaded_project: dict[
             "model": "gemini-2.5-flash",
         },
     )
-    assert analyze_response.status_code == 200
+    assert analyze_response.status_code == 202
     analyze_payload = analyze_response.json()
-    assert len(analyze_payload["analyses"]) == 2
+    assert analyze_payload["status"] == "processing"
+
+    analyzed_project = _wait_for_project_status(client, project_id, expected_status="analyzed")
+    assert len(analyzed_project["analyses"]) == 2
 
     edit_response = client.post(
         "/api/edit",
@@ -86,7 +111,8 @@ def test_edit_returns_service_unavailable_when_render_fails(
             "model": "gemini-2.5-flash",
         },
     )
-    assert analyze_response.status_code == 200
+    assert analyze_response.status_code == 202
+    _wait_for_project_status(client, project_id, expected_status="analyzed")
 
     original_editor = client.app.state.video_editor
     client.app.state.video_editor = FailingEditor()
@@ -137,13 +163,11 @@ def test_analyze_returns_service_unavailable_when_analyzer_fails(
     finally:
         client.app.state.video_analyzer = original_analyzer
 
-    assert analyze_response.status_code == 503
-    assert analyze_response.json()["detail"] == "Gemini analysis failed"
+    assert analyze_response.status_code == 202
+    assert analyze_response.json()["status"] == "processing"
     assert "access-control-allow-origin" in analyze_response.headers
 
-    project_response = client.get(f"/api/project/{project_id}")
-    assert project_response.status_code == 200
-    project_payload = project_response.json()
+    project_payload = _wait_for_project_status(client, project_id, expected_status="error")
     assert project_payload["status"] == "error"
     assert project_payload["progress"]["message"] == "Gemini analysis failed"
 
@@ -178,9 +202,7 @@ def test_analyze_returns_accepted_when_still_processing(
     project_id = uploaded_project["project_id"]
 
     original_analyzer = client.app.state.video_analyzer
-    original_timeout = client.app.state.settings.analysis_sync_timeout_seconds
     client.app.state.video_analyzer = SlowAnalyzer()
-    client.app.state.settings.analysis_sync_timeout_seconds = 1
     try:
         analyze_response = client.post(
             "/api/analyze",
@@ -192,7 +214,6 @@ def test_analyze_returns_accepted_when_still_processing(
         )
     finally:
         client.app.state.video_analyzer = original_analyzer
-        client.app.state.settings.analysis_sync_timeout_seconds = original_timeout
 
     assert analyze_response.status_code == 202
     payload = analyze_response.json()
