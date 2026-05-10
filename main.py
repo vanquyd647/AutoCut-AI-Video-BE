@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api import ROUTERS
 from config import get_settings
-from core import EditPlanner, ExportService, GeminiClient, KeepAlivePinger, ProgressBroker, ProjectStore, VideoAnalyzer, VideoEditor
+from core import EditPlanner, ExportService, GeminiClient, KeepAlivePinger, ProgressBroker, ProjectStore, SceneDetector, TranscriptionService, VideoAnalyzer, VideoEditor
 from models.schemas import ProgressUpdate
 
 
@@ -28,6 +28,9 @@ async def lifespan(app: FastAPI):
     app.state.edit_planner = EditPlanner(gemini_client)
     app.state.video_editor = VideoEditor(settings)
     app.state.export_service = ExportService(settings)
+    app.state.scene_detector = SceneDetector()
+    # Lazy-load transcription service (Whisper model is loaded on first use)
+    app.state.transcription_service = None
     app.state.ffmpeg_available = settings.ffmpeg_available()
     app.state.keep_alive_pinger = KeepAlivePinger(
         enabled=settings.auto_ping_enabled,
