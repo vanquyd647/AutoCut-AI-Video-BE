@@ -13,6 +13,19 @@ class FailingEditor:
         raise RuntimeError("FFmpeg is required to render videos")
 
 
+class FailingPlanner:
+    async def create_plan(
+        self,
+        analyses,
+        style,
+        target_duration,
+        aspect_ratio,
+        api_key,
+        model=None,
+    ):
+        raise RuntimeError("Edit plan generation failed")
+
+
 class FailingAnalyzer:
     async def analyze_batch(self, videos, api_key, model=None):
         raise RuntimeError("Gemini analysis failed")
@@ -139,6 +152,53 @@ def test_edit_returns_service_unavailable_when_render_fails(
     project_payload = project_response.json()
     assert project_payload["status"] == "error"
     assert project_payload["progress"]["message"] == "FFmpeg is required to render videos"
+
+
+def test_edit_returns_service_unavailable_when_planner_fails(
+    client: TestClient,
+    uploaded_project: dict[str, object],
+) -> None:
+    project_id = uploaded_project["project_id"]
+    origin = app_settings.cors_origins[0] if app_settings.cors_origins and app_settings.cors_origins[0] != "*" else "https://frontend.example.com"
+
+    analyze_response = client.post(
+        "/api/analyze",
+        json={
+            "project_id": project_id,
+            "api_key": "test-key",
+            "model": "gemini-2.5-flash",
+        },
+    )
+    assert analyze_response.status_code == 202
+    _wait_for_project_status(client, project_id, expected_status="analyzed")
+
+    original_planner = client.app.state.edit_planner
+    client.app.state.edit_planner = FailingPlanner()
+    try:
+        edit_response = client.post(
+            "/api/edit",
+            json={
+                "project_id": project_id,
+                "api_key": "test-key",
+                "style": "tiktok",
+                "target_duration": 30,
+                "aspect_ratio": "9:16",
+                "model": "gemini-2.5-flash",
+            },
+            headers={"Origin": origin},
+        )
+    finally:
+        client.app.state.edit_planner = original_planner
+
+    assert edit_response.status_code == 503
+    assert edit_response.json()["detail"] == "Edit plan generation failed"
+    assert edit_response.headers["access-control-allow-origin"] == origin
+
+    project_response = client.get(f"/api/project/{project_id}")
+    assert project_response.status_code == 200
+    project_payload = project_response.json()
+    assert project_payload["status"] == "error"
+    assert project_payload["progress"]["message"] == "Edit plan generation failed"
 
 
 def test_analyze_returns_service_unavailable_when_analyzer_fails(

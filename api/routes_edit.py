@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request, status
 
 from models.schemas import EditRequest, EditResponse, ProgressUpdate
 
 
 router = APIRouter(tags=["edit"])
+logger = logging.getLogger(__name__)
+
+
+async def _mark_failed(store, broker, project_id: str, message: str) -> None:
+    failed = ProgressUpdate(stage="error", progress=100, message=message)
+    try:
+        store.set_progress(project_id, failed)
+    except Exception:
+        logger.exception("Failed to persist edit error progress for project %s", project_id)
+
+    try:
+        await broker.publish(project_id, failed)
+    except Exception:
+        logger.exception("Failed to publish edit error progress for project %s", project_id)
 
 
 @router.post("/edit", response_model=EditResponse)
@@ -28,14 +44,24 @@ async def edit_project(payload: EditRequest, request: Request) -> EditResponse:
     store.set_progress(payload.project_id, planning)
     await broker.publish(payload.project_id, planning)
 
-    plan = await planner.create_plan(
-        analyses=record.analyses,
-        style=payload.style,
-        target_duration=payload.target_duration,
-        aspect_ratio=payload.aspect_ratio,
-        api_key=api_key,
-        model=payload.model,
-    )
+    try:
+        plan = await planner.create_plan(
+            analyses=record.analyses,
+            style=payload.style,
+            target_duration=payload.target_duration,
+            aspect_ratio=payload.aspect_ratio,
+            api_key=api_key,
+            model=payload.model,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+    except Exception as exc:
+        logger.exception("Unexpected planning failure for project %s", payload.project_id)
+        message = "Failed to create edit plan"
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
 
     async def on_progress(stage: str, progress: float, message: str) -> None:
         update = ProgressUpdate(stage=stage, progress=progress, message=message)
@@ -51,18 +77,31 @@ async def edit_project(payload: EditRequest, request: Request) -> EditResponse:
             on_progress=on_progress,
         )
     except RuntimeError as exc:
-        await on_progress("error", 100, str(exc))
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        message = str(exc)
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+    except Exception as exc:
+        logger.exception("Unexpected render failure for project %s", payload.project_id)
+        message = "Video rendering failed unexpectedly"
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
 
     finished = ProgressUpdate(stage="export", progress=100, message="Export ready")
     output_url = f"/api/export/{payload.project_id}"
-    store.update_project(
-        payload.project_id,
-        plan=plan,
-        output_video=output_url,
-        status="completed",
-        progress=finished,
-    )
+    try:
+        store.update_project(
+            payload.project_id,
+            plan=plan,
+            output_video=output_url,
+            status="completed",
+            progress=finished,
+        )
+    except Exception as exc:
+        logger.exception("Failed to persist edit result for project %s", payload.project_id)
+        message = "Failed to save edit result"
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+
     await broker.publish(payload.project_id, finished)
     return EditResponse(
         plan=plan,
