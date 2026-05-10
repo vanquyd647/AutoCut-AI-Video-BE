@@ -9,3 +9,4 @@ moviepy==1.0.3
 ffmpeg-python==0.2.0
 websockets==15.0.1
 pillow==12.2.0
+scenedetect==0.6.1
