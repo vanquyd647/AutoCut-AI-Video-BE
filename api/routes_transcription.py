@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
 
@@ -33,16 +34,15 @@ async def transcribe_video(
     store = request.app.state.project_store
     broker = request.app.state.progress_broker
 
-    try:
-        record = store.get_project(project_id)
-    except Exception as exc:
+    record = store.get_project(project_id)
+    if record is None:
         logger.warning("Project not found: %s", project_id)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     # Find the video in the project
     video = None
-    for v in record.get("videos", []):
-        if v.get("name") == video_name or v.get("stored_name") == video_name:
+    for v in record.videos:
+        if v.name == video_name or v.stored_name == video_name:
             video = v
             break
 
@@ -52,7 +52,7 @@ async def transcribe_video(
             detail="Video not found in project",
         )
 
-    video_path = store.get_video_path(project_id, video.get("stored_name"))
+    video_path = Path(video.path)
 
     if not video_path.exists():
         logger.warning("Video file not found: %s", video_path)
@@ -92,8 +92,8 @@ async def transcribe_video(
         await broker.publish(project_id, finished)
 
         # Store transcription in project
-        transcriptions = record.get("transcriptions", {})
-        transcriptions[video.get("stored_name")] = result
+        transcriptions = dict(record.transcriptions)
+        transcriptions[video.stored_name] = result
         try:
             store.update_project(project_id, transcriptions=transcriptions)
         except Exception:

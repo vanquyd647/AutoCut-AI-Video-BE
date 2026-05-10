@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -103,6 +104,8 @@ class ProjectRecord(AppModel):
     status: str = "uploaded"
     videos: list[VideoInfo] = Field(default_factory=list)
     analyses: list[VideoAnalysis] = Field(default_factory=list)
+    scenes: dict[str, Any] = Field(default_factory=dict)
+    transcriptions: dict[str, Any] = Field(default_factory=dict)
     plan: EditPlan | None = None
     output_video: str | None = None
     progress: ProgressUpdate | None = None

@@ -27,36 +27,42 @@ async def detect_scenes(project_id: str, request: Request) -> dict:
     store = request.app.state.project_store
     broker = request.app.state.progress_broker
 
-    try:
-        record = store.get_project(project_id)
-    except Exception as exc:
+    record = store.get_project(project_id)
+    if record is None:
         logger.warning("Project not found: %s", project_id)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    if not record.get("videos"):
+    if not record.videos:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No videos uploaded yet",
         )
 
-    detector = SceneDetector()
+    detector = request.app.state.scene_detector or SceneDetector()
     results = {}
 
     try:
         # Detect scenes for each video
-        for video in record["videos"]:
-            stored_name = video.get("stored_name")
-            video_path = store.get_video_path(project_id, stored_name)
+        for video in record.videos:
+            stored_name = video.stored_name
+            video_path = Path(video.path)
 
             if not video_path.exists():
                 logger.warning("Video file not found: %s", video_path)
-                results[stored_name] = {"error": "Video file not found", "scenes": []}
+                results[stored_name] = {
+                    "video_name": video.name,
+                    "stored_name": stored_name,
+                    "error": "Video file not found",
+                    "scenes": [],
+                    "scene_count": 0,
+                }
                 continue
 
             # Run scene detection
             scenes = await detector.detect_scenes_async(str(video_path))
             results[stored_name] = {
-                "video_name": video.get("name"),
+                "video_name": video.name,
+                "stored_name": stored_name,
                 "scenes": scenes,
                 "scene_count": len(scenes),
             }
@@ -64,7 +70,7 @@ async def detect_scenes(project_id: str, request: Request) -> dict:
             # Publish progress
             progress = ProgressUpdate(
                 stage="scenes",
-                progress=int((len(results) / len(record["videos"])) * 100),
+                progress=int((len(results) / len(record.videos)) * 100),
                 message=f"Detected scenes in {stored_name}",
             )
             await broker.publish(project_id, progress)
@@ -86,7 +92,7 @@ async def detect_scenes(project_id: str, request: Request) -> dict:
         return {
             "project_id": project_id,
             "scenes": results,
-            "total_videos": len(record["videos"]),
+            "total_videos": len(record.videos),
         }
 
     except Exception as exc:
