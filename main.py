@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.project_store = ProjectStore(settings)
     app.state.progress_broker = ProgressBroker()
+    app.state.analyze_jobs = {}
     gemini_client = GeminiClient(settings)
     app.state.video_analyzer = VideoAnalyzer(settings, gemini_client)
     app.state.edit_planner = EditPlanner(gemini_client)
@@ -38,6 +40,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        analyze_jobs = list(app.state.analyze_jobs.values())
+        for job in analyze_jobs:
+            job.cancel()
+        if analyze_jobs:
+            await asyncio.gather(*analyze_jobs, return_exceptions=True)
         await app.state.keep_alive_pinger.stop()
 
 

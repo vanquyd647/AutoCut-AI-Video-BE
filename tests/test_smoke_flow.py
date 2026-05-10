@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from main import settings as app_settings
@@ -13,6 +15,12 @@ class FailingEditor:
 class FailingAnalyzer:
     async def analyze_batch(self, videos, api_key, model=None):
         raise RuntimeError("Gemini analysis failed")
+
+
+class SlowAnalyzer:
+    async def analyze_batch(self, videos, api_key, model=None):
+        await asyncio.sleep(1.2)
+        return []
 
 
 class BrokenProjectStore:
@@ -161,3 +169,32 @@ def test_analyze_returns_service_unavailable_when_project_load_fails(client: Tes
     assert analyze_response.status_code == 503
     assert analyze_response.json()["detail"] == "Project data is unavailable"
     assert "access-control-allow-origin" in analyze_response.headers
+
+
+def test_analyze_returns_accepted_when_still_processing(
+    client: TestClient,
+    uploaded_project: dict[str, object],
+) -> None:
+    project_id = uploaded_project["project_id"]
+
+    original_analyzer = client.app.state.video_analyzer
+    original_timeout = client.app.state.settings.analysis_sync_timeout_seconds
+    client.app.state.video_analyzer = SlowAnalyzer()
+    client.app.state.settings.analysis_sync_timeout_seconds = 1
+    try:
+        analyze_response = client.post(
+            "/api/analyze",
+            json={
+                "project_id": project_id,
+                "api_key": "test-key",
+                "model": "gemini-2.5-flash",
+            },
+        )
+    finally:
+        client.app.state.video_analyzer = original_analyzer
+        client.app.state.settings.analysis_sync_timeout_seconds = original_timeout
+
+    assert analyze_response.status_code == 202
+    payload = analyze_response.json()
+    assert payload["status"] == "processing"
+    assert "Poll /api/project/" in payload["message"]

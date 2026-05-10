@@ -121,6 +121,8 @@ class AnalyzeRequest(AppModel):
 
 class AnalyzeResponse(AppModel):
     analyses: list[VideoAnalysis]
+    status: str = "completed"
+    message: str | None = None
 
 
 class EditRequest(AppModel):

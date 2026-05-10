@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     max_video_size_mb: int = 500
     inline_video_limit_mb: int = 18
     analysis_segment_seconds: int = 25
+    analysis_sync_timeout_seconds: int = 55
     auto_ping_enabled: bool = False
     auto_ping_url: str | None = None
     auto_ping_interval_seconds: int = 240
