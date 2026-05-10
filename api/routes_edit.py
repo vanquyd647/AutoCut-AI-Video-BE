@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from models.schemas import EditRequest, EditResponse, ProgressUpdate
+from models.schemas import EditRequest, EditResponse, ManualEditRequest, ProgressUpdate
 
 
 router = APIRouter(tags=["edit"])
@@ -105,6 +105,67 @@ async def edit_project(payload: EditRequest, request: Request) -> EditResponse:
     await broker.publish(payload.project_id, finished)
     return EditResponse(
         plan=plan,
+        output_video_url=output_url,
+        progress_ws_url=f"/ws/progress/{payload.project_id}",
+    )
+
+
+@router.post("/edit/manual", response_model=EditResponse)
+async def edit_project_manual(payload: ManualEditRequest, request: Request) -> EditResponse:
+    store = request.app.state.project_store
+    broker = request.app.state.progress_broker
+    editor = request.app.state.video_editor
+
+    record = store.get_project(payload.project_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    planning = ProgressUpdate(stage="plan", progress=10, message="Using manual timeline order")
+    store.set_progress(payload.project_id, planning)
+    await broker.publish(payload.project_id, planning)
+
+    async def on_progress(stage: str, progress: float, message: str) -> None:
+        update = ProgressUpdate(stage=stage, progress=progress, message=message)
+        store.set_progress(payload.project_id, update)
+        await broker.publish(payload.project_id, update)
+
+    await on_progress("render", 25, "Rendering clips from manual timeline")
+    try:
+        await editor.render(
+            project_id=payload.project_id,
+            videos=record.videos,
+            plan=payload.plan,
+            on_progress=on_progress,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+    except Exception as exc:
+        logger.exception("Unexpected manual render failure for project %s", payload.project_id)
+        message = "Video rendering failed unexpectedly"
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+
+    finished = ProgressUpdate(stage="export", progress=100, message="Export ready")
+    output_url = f"/api/export/{payload.project_id}"
+    try:
+        store.update_project(
+            payload.project_id,
+            plan=payload.plan,
+            output_video=output_url,
+            status="completed",
+            progress=finished,
+        )
+    except Exception as exc:
+        logger.exception("Failed to persist manual edit result for project %s", payload.project_id)
+        message = "Failed to save edit result"
+        await _mark_failed(store, broker, payload.project_id, message)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+
+    await broker.publish(payload.project_id, finished)
+    return EditResponse(
+        plan=payload.plan,
         output_video_url=output_url,
         progress_ws_url=f"/ws/progress/{payload.project_id}",
     )

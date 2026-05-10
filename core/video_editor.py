@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from config import Settings
-from ffmpeg_runtime import collect_media_info
+from ffmpeg_runtime import collect_media_info, ffmpeg_supports_encoder
 from models.schemas import EditPlan, SpeedEffect, TextOverlay, TransitionSpec, VideoInfo
 
 
@@ -19,6 +19,7 @@ class VideoEditor:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._nvenc_available_cache: bool | None = None
 
     async def render(
         self,
@@ -497,8 +498,63 @@ class VideoEditor:
         return round(start, 3), round(end, 3)
 
     def _video_encode_args(self) -> list[str]:
-        # Favor visual quality over speed, especially for 4K sources.
-        return ["-c:v", "libx264", "-preset", "slow", "-crf", "12", "-pix_fmt", "yuv420p"]
+        thread_args = self._ffmpeg_thread_args()
+        if self._should_use_nvenc():
+            return [
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                self.settings.nvenc_preset,
+                "-rc",
+                "vbr",
+                "-cq",
+                f"{self.settings.nvenc_cq}",
+                "-b:v",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                *thread_args,
+            ]
+
+        # Favor visual quality over speed when NVENC is unavailable.
+        return [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "slow",
+            "-crf",
+            f"{self.settings.video_crf}",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            *thread_args,
+        ]
+
+    def nvenc_available(self) -> bool:
+        return self._supports_nvenc()
+
+    def active_video_encoder(self) -> str:
+        return "h264_nvenc" if self._should_use_nvenc() else "libx264"
+
+    def _should_use_nvenc(self) -> bool:
+        mode = self.settings.video_acceleration
+        if mode == "cpu":
+            return False
+        return self._supports_nvenc()
+
+    def _supports_nvenc(self) -> bool:
+        if self._nvenc_available_cache is not None:
+            return self._nvenc_available_cache
+        self._nvenc_available_cache = ffmpeg_supports_encoder(self._ffmpeg_path(), "h264_nvenc")
+        return self._nvenc_available_cache
+
+    def _ffmpeg_thread_args(self) -> list[str]:
+        if self.settings.video_threads <= 0:
+            return []
+        return ["-threads", f"{self.settings.video_threads}"]
 
     def _is_4k_source(self, width: int, height: int) -> bool:
         return width >= self.FOUR_K_WIDTH or height >= self.FOUR_K_HEIGHT

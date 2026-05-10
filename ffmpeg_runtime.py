@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 import shutil
 import subprocess
@@ -31,6 +32,25 @@ def resolve_ffmpeg_path(configured_path: str | Path | None = None) -> Path | Non
 
 def ffmpeg_available(configured_path: str | Path | None = None) -> bool:
     return resolve_ffmpeg_path(configured_path) is not None
+
+
+@lru_cache(maxsize=8)
+def _encoders_output(ffmpeg_binary: str) -> str:
+    result = subprocess.run(
+        [ffmpeg_binary, "-hide_banner", "-encoders"],
+        capture_output=True,
+        text=True,
+    )
+    return ((result.stdout or "") + "\n" + (result.stderr or "")).lower()
+
+
+def ffmpeg_supports_encoder(ffmpeg_path: Path, encoder_name: str) -> bool:
+    if not encoder_name:
+        return False
+    try:
+        return encoder_name.lower() in _encoders_output(str(ffmpeg_path))
+    except Exception:
+        return False
 
 
 def collect_media_info(ffmpeg_path: Path, media_path: Path) -> dict[str, object]:

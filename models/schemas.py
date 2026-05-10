@@ -134,6 +134,11 @@ class EditRequest(AppModel):
     model: str = "gemini-2.5-flash"
 
 
+class ManualEditRequest(AppModel):
+    project_id: str
+    plan: EditPlan
+
+
 class EditResponse(AppModel):
     plan: EditPlan
     output_video_url: str
